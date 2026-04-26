@@ -386,130 +386,688 @@ select concat(first_name, ' ',last_name) as full_name,
 -- =====================================================
 
 -- 81. Which customers bought products in more than one category?
+SELECT 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    COUNT(DISTINCT p.category) AS num_categories
+FROM assignment.customers c
+JOIN assignment.sales s ON c.customer_id = s.customer_id
+JOIN assignment.products p ON s.product_id = p.product_id
+GROUP BY c.customer_id, c.first_name, c.last_name
+HAVING COUNT(DISTINCT p.category) > 1
+ORDER BY num_categories DESC;
 
 -- 82. Which customers purchased products within 7 days of registering?
+SELECT DISTINCT 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    c.registration_date,
+    MIN(s.sale_date) AS first_purchase_date
+FROM assignment.customers c
+JOIN assignment.sales s ON c.customer_id = s.customer_id
+WHERE s.sale_date <= c.registration_date + INTERVAL '7 days'
+GROUP BY c.customer_id, c.first_name, c.last_name, c.registration_date;
 
 -- 83. Which products have lower stock remaining than the average stock quantity?
+WITH avg_stock AS (
+    SELECT AVG(stock_quantity) AS avg_stock
+    FROM assignment.products
+)
+SELECT 
+    product_id,
+    product_name,
+    stock_quantity,
+    (SELECT avg_stock FROM avg_stock) AS avg_stock_qty
+FROM assignment.products
+WHERE stock_quantity < (SELECT avg_stock FROM avg_stock)
+ORDER BY stock_quantity ASC;
 
 -- 84. Which customers purchased the same product more than once?
+SELECT 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    s.product_id,
+    p.product_name,
+    COUNT(*) AS purchase_count
+FROM assignment.customers c
+JOIN assignment.sales s ON c.customer_id = s.customer_id
+JOIN assignment.products p ON s.product_id = p.product_id
+GROUP BY c.customer_id, c.first_name, c.last_name, s.product_id, p.product_name
+HAVING COUNT(*) > 1
+ORDER BY purchase_count DESC;
 
 -- 85. Which product categories generated the highest total revenue?
+SELECT 
+    p.category,
+    SUM(s.total_amount) AS total_revenue
+FROM assignment.sales s
+JOIN assignment.products p ON s.product_id = p.product_id
+GROUP BY p.category
+ORDER BY total_revenue DESC;
 
 -- 86. Which products are among the top 3 most sold products?
+WITH ranked_products AS (
+    SELECT 
+        p.product_id,
+        p.product_name,
+        SUM(s.quantity_sold) AS total_sold,
+        RANK() OVER (ORDER BY SUM(s.quantity_sold) DESC) AS rank
+    FROM assignment.sales s
+    JOIN assignment.products p ON s.product_id = p.product_id
+    GROUP BY p.product_id, p.product_name
+)
+SELECT product_id, product_name, total_sold
+FROM ranked_products
+WHERE rank <= 3;
 
 -- 87. Which customers purchased the most expensive product?
+WITH max_price AS (
+    SELECT MAX(price) AS max_p FROM assignment.products
+)
+SELECT DISTINCT 
+    c.customer_id,
+    c.first_name,
+    c.last_name
+FROM assignment.customers c
+JOIN assignment.sales s ON c.customer_id = s.customer_id
+JOIN assignment.products p ON s.product_id = p.product_id
+WHERE p.price = (SELECT max_p FROM max_price);
 
 -- 88. Which products were purchased by the highest number of unique customers?
+SELECT 
+    p.product_id,
+    p.product_name,
+    COUNT(DISTINCT s.customer_id) AS unique_customers
+FROM assignment.sales s
+JOIN assignment.products p ON s.product_id = p.product_id
+GROUP BY p.product_id, p.product_name
+ORDER BY unique_customers DESC
+LIMIT 10; 
 
 -- 89. Which customers made purchases above the average sale amount?
+WITH avg_sale AS (
+    SELECT AVG(total_amount) AS avg_amount FROM assignment.sales
+)
+SELECT DISTINCT 
+    c.customer_id,
+    c.first_name,
+    c.last_name
+FROM assignment.customers c
+JOIN assignment.sales s ON c.customer_id = s.customer_id
+WHERE s.total_amount > (SELECT avg_amount FROM avg_sale);
 
 -- 90. Which customers purchased more products than the average quantity purchased per customer?
+WITH customer_totals AS (
+    SELECT 
+        customer_id,
+        SUM(quantity_sold) AS total_qty
+    FROM assignment.sales
+    GROUP BY customer_id
+),
+avg_qty AS (
+    SELECT AVG(total_qty) AS avg_quantity 
+    FROM customer_totals
+)
+SELECT 
+    c.cust_id,
+    c.first_name,
+    c.last_name,
+    ct.total_qty
+FROM customer_totals ct
+JOIN assignment.customers c ON ct.customer_id = c.cust_id
+WHERE ct.total_qty > (SELECT avg_quantity FROM avg_qty)
+ORDER BY ct.total_qty DESC;
 
 -- ADVANCED WINDOW + ANALYTICAL PROBLEMS
 
 -- 91. Which customers rank in the top 10% of spending?
+WITH customer_spending AS (
+    SELECT 
+        customer_id,
+        SUM(total_amount) AS total_spent,
+        NTILE(10) OVER (ORDER BY SUM(total_amount) DESC) AS percentile
+    FROM assignment.sales
+    GROUP BY customer_id
+)
+SELECT 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    cs.total_spent
+FROM customer_spending cs
+JOIN assignment.customers c ON cs.customer_id = c.customer_id
+WHERE cs.percentile = 1  -- top 10%
+ORDER BY cs.total_spent DESC;
 
 -- 92. Which products contribute to the top 50% of total revenue?
+WITH product_revenue AS (
+    SELECT 
+        p.product_id,
+        p.product_name,
+        SUM(s.total_amount) AS revenue,
+        SUM(SUM(s.total_amount)) OVER () AS grand_total,
+        SUM(SUM(s.total_amount)) OVER (ORDER BY SUM(s.total_amount) DESC) AS running_total
+    FROM assignment.sales s
+    JOIN assignment.products p ON s.product_id = p.product_id
+    GROUP BY p.product_id, p.product_name
+)
+SELECT 
+    product_id,
+    product_name,
+    revenue,
+    (running_total / grand_total * 100) AS cumulative_percent
+FROM product_revenue
+WHERE running_total / grand_total <= 0.5
+ORDER BY revenue DESC;
 
 -- 93. Which customers made purchases in consecutive months?
+WITH monthly_purchases AS (
+    SELECT 
+        customer_id,
+        DATE_TRUNC('month', sale_date) AS purchase_month,
+        LAG(DATE_TRUNC('month', sale_date)) OVER (PARTITION BY customer_id ORDER BY DATE_TRUNC('month', sale_date)) AS prev_month
+    FROM assignment.sales
+    GROUP BY customer_id, DATE_TRUNC('month', sale_date)
+)
+SELECT DISTINCT 
+    c.customer_id,
+    c.first_name,
+    c.last_name
+FROM monthly_purchases mp
+JOIN assignment.customers c ON mp.customer_id = c.customer_id
+WHERE mp.purchase_month = mp.prev_month + INTERVAL '1 month';
 
 -- 94. Which products experienced the largest difference between stock quantity and total quantity sold?
+SELECT 
+    p.product_id,
+    p.product_name,
+    p.stock_quantity,
+    COALESCE(SUM(s.quantity_sold), 0) AS total_sold,
+    p.stock_quantity - COALESCE(SUM(s.quantity_sold), 0) AS stock_diff
+FROM assignment.products p
+LEFT JOIN assignment.sales s ON p.product_id = s.product_id
+GROUP BY p.product_id, p.product_name, p.stock_quantity
+ORDER BY ABS(stock_quantity) DESC
+LIMIT 10;
 
 -- 95. Which customers have spending above the average spending of their membership tier?
+WITH tier_avg AS (
+    SELECT 
+        c.membership_status,
+        AVG(total_spent) AS avg_tier_spend
+    FROM (
+        SELECT 
+            customer_id,
+            SUM(total_amount) AS total_spent
+        FROM assignment.sales
+        GROUP BY customer_id
+    ) sp
+    JOIN assignment.customers c ON sp.customer_id = c.customer_id
+    GROUP BY c.membership_status
+)
+SELECT 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    c.membership_status,
+    sp.total_spent,
+    ta.avg_tier_spend
+FROM (
+    SELECT customer_id, SUM(total_amount) AS total_spent
+    FROM assignment.sales
+    GROUP BY customer_id
+) sp
+JOIN assignment.customers c ON sp.customer_id = c.customer_id
+JOIN tier_avg ta ON c.membership_status = ta.membership_status
+WHERE sp.total_spent > ta.avg_tier_spend;
 
 -- 96. Which products have higher sales than the average sales within their category?
+WITH category_avg AS (
+    SELECT 
+        p.category,
+        AVG(total_sold) AS avg_category_sales
+    FROM (
+        SELECT 
+            product_id,
+            SUM(quantity_sold) AS total_sold
+        FROM assignment.sales
+        GROUP BY product_id
+    ) sold
+    JOIN assignment.products p ON sold.product_id = p.product_id
+    GROUP BY p.category
+)
+SELECT 
+    p.product_id,
+    p.product_name,
+    p.category,
+    COALESCE(SUM(s.quantity_sold), 0) AS product_sales,
+    ca.avg_category_sales
+FROM assignment.products p
+LEFT JOIN assignment.sales s ON p.product_id = s.product_id
+JOIN category_avg ca ON p.category = ca.category
+GROUP BY p.product_id, p.product_name, p.category, ca.avg_category_sales
+HAVING COALESCE(SUM(s.quantity_sold), 0) > ca.avg_category_sales;
 
 -- 97. Which customer made the largest single purchase relative to their total spending?
+WITH customer_stats AS (
+    SELECT 
+        customer_id,
+        SUM(total_amount) AS total_spent,
+        MAX(total_amount) AS largest_single
+    FROM assignment.sales
+    GROUP BY customer_id
+)
+SELECT 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    cs.largest_single,
+    cs.total_spent,
+    (cs.largest_single::float / cs.total_spent) AS ratio
+FROM customer_stats cs
+JOIN assignment.customers c ON cs.customer_id = c.customer_id
+ORDER BY ratio DESC
+LIMIT 5;
 
 -- 98. Which products rank among the top 3 most sold products within each category?
+WITH ranked AS (
+    SELECT 
+        p.category,
+        p.product_id,
+        p.product_name,
+        SUM(s.quantity_sold) AS total_sold,
+        RANK() OVER (PARTITION BY p.category ORDER BY SUM(s.quantity_sold) DESC) AS rank
+    FROM assignment.sales s
+    JOIN assignment.products p ON s.product_id = p.product_id
+    GROUP BY p.category, p.product_id, p.product_name
+)
+SELECT category, product_id, product_name, total_sold, rank
+FROM ranked
+WHERE rank <= 3
+ORDER BY category, rank;
 
 -- 99. Which customers are tied for the highest total spending?
+WITH spending AS (
+    SELECT 
+        customer_id,
+        SUM(total_amount) AS total_spent,
+        RANK() OVER (ORDER BY SUM(total_amount) DESC) AS rnk
+    FROM assignment.sales
+    GROUP BY customer_id
+)
+SELECT 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    s.total_spent
+FROM spending s
+JOIN assignment.customers c ON s.customer_id = c.customer_id
+WHERE s.rnk = 1;
 
 -- 100. Which products generated sales every year present in the dataset?
+WITH years AS (
+    SELECT DISTINCT EXTRACT(YEAR FROM sale_date) AS sale_year
+    FROM assignment.sales
+),
+product_years AS (
+    SELECT 
+        p.product_id,
+        p.product_name,
+        COUNT(DISTINCT EXTRACT(YEAR FROM s.sale_date)) AS years_with_sales
+    FROM assignment.products p
+    JOIN assignment.sales s ON p.product_id = s.product_id
+    GROUP BY p.product_id, p.product_name
+)
+SELECT py.product_id, py.product_name
+FROM product_years py
+JOIN (SELECT COUNT(*) AS total_years FROM years) y ON py.years_with_sales = y.total_years;
 
 -- 101. Update the products table to assign a price_category as Expensive (price > 1000), Moderate (price between 500 and 1000), or Affordable (price < 500) using CASE WHEN
+ALTER TABLE assignment.products ADD COLUMN IF NOT EXISTS price_category VARCHAR(20);
+
+UPDATE assignment.products
+SET price_category = 
+    CASE 
+        WHEN price > 1000 THEN 'Expensive'
+        WHEN price BETWEEN 500 AND 1000 THEN 'Moderate'
+        WHEN price < 500 THEN 'Affordable'
+        ELSE 'Unknown'
+    END;
 
 -- 102. Update the customers table to assign a customer_level based on total spending as VIP (>20000), Regular (10000–20000), or New (<10000) using CASE WHEN
+-- First, create a temporary table or use a CTE; here we assume we add the column
+ALTER TABLE assignment.customers ADD COLUMN IF NOT EXISTS customer_level VARCHAR(20);
+
+WITH customer_spend AS (
+    SELECT 
+        customer_id,
+        SUM(total_amount) AS total_spent
+    FROM assignment.sales
+    GROUP BY customer_id
+)
+UPDATE assignment.customers c
+SET customer_level = 
+    CASE 
+        WHEN cs.total_spent > 20000 THEN 'VIP'
+        WHEN cs.total_spent BETWEEN 10000 AND 20000 THEN 'Regular'
+        ELSE 'New'
+    END
+FROM customer_spend cs
+WHERE c.customer_id = cs.customer_id;
 
 -- 103. Update the products table to assign a stock_status as Low Stock or Sufficient Stock based on stock_quantity using CASE WHEN
+ALTER TABLE assignment.products ADD COLUMN IF NOT EXISTS stock_status VARCHAR(20);
+
+UPDATE assignment.products
+SET stock_status = 
+    CASE 
+        WHEN stock_quantity < 10 THEN 'Low Stock'   -- adjust threshold as needed
+        ELSE 'Sufficient Stock'
+    END;
 
 -- 104. Display each customer’s registration year from the registration_date
+SELECT 
+    customer_id,
+    first_name,
+    last_name,
+    EXTRACT(YEAR FROM registration_date) AS registration_year
+FROM assignment.customers;
 
 -- 105. Count how many customers registered in each year
+SELECT 
+    EXTRACT(YEAR FROM registration_date) AS registration_year,
+    COUNT(*) AS customer_count
+FROM assignment.customers
+GROUP BY registration_year
+ORDER BY registration_year;
 
 -- 106. Find the total sales amount for each month
+SELECT 
+    DATE_TRUNC('month', sale_date) AS sale_month,
+    SUM(total_amount) AS monthly_revenue
+FROM assignment.sales
+GROUP BY sale_month
+ORDER BY sale_month;
 
 -- 107. Show all sales made in the year 2023
+SELECT *
+FROM assignment.sales
+WHERE EXTRACT(YEAR FROM sale_date) = 2023
+ORDER BY sale_date;
 
 -- 108. Find the total sales amount for each year
+SELECT 
+    EXTRACT(YEAR FROM sale_date) AS sale_year,
+    SUM(total_amount) AS yearly_revenue
+FROM assignment.sales
+GROUP BY sale_year
+ORDER BY sale_year;
 
 -- 109. Calculate the number of days each customer has been registered (from registration_date to current date)
+SELECT 
+    customer_id,
+    first_name,
+    last_name,
+    registration_date,
+    CURRENT_DATE - registration_date AS days_registered
+FROM assignment.customers;
 
 -- 110. Display each sale and extract the year and month from the sale date
+SELECT 
+    sale_id,
+    customer_id,
+    product_id,
+    sale_date,
+    EXTRACT(YEAR FROM sale_date) AS sale_year,
+    TO_CHAR(sale_date, 'Month') AS sale_month
+FROM assignment.sales;
 
 -- 111. Display each customer’s email and replace null values with 'No Email Provided' using COALESCE
+SELECT 
+    customer_id,
+    first_name,
+    last_name,
+    COALESCE(email, 'No Email Provided') AS email
+FROM assignment.customers;
 
 -- 112. Find customers who do not have an email address
+SELECT *
+FROM assignment.customers
+WHERE email IS NULL OR email = '';
 
 -- 113. Find products that have never been sold using a subquery
+SELECT *
+FROM assignment.products p
+WHERE p.product_id NOT IN (SELECT DISTINCT product_id FROM assignment.sales);
 
 -- 114. Find customers who have not made any purchases using a subquery
+SELECT *
+FROM assignment.customers c
+WHERE c.customer_id NOT IN (SELECT DISTINCT customer_id FROM assignment.sales);
 
 -- 115. Update the products table to assign a price_category (Premium, Standard, Budget) based on price using CASE WHEN
+ALTER TABLE assignment.products ADD COLUMN IF NOT EXISTS price_category VARCHAR(20);
+
+UPDATE assignment.products
+SET price_category = 
+    CASE 
+        WHEN price > 1000 THEN 'Premium'
+        WHEN price BETWEEN 300 AND 1000 THEN 'Standard'
+        ELSE 'Budget'
+    END;
 
 -- 116. Create a PostgreSQL function/procedure that takes a minimum revenue as input and returns all products whose total sales exceed that value
+CREATE OR REPLACE FUNCTION get_high_revenue_products(min_revenue NUMERIC)
+RETURNS TABLE (
+    product_id INT,
+    product_name VARCHAR,
+    total_sales NUMERIC
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        p.product_id,
+        p.product_name,
+        SUM(s.total_amount) AS total_sales
+    FROM assignment.sales s
+    JOIN assignment.products p ON s.product_id = p.product_id
+    GROUP BY p.product_id, p.product_name
+    HAVING SUM(s.total_amount) > min_revenue
+    ORDER BY total_sales DESC;
+END;
+$$ LANGUAGE plpgsql;
 
 -- 117. Create a PostgreSQL function/procedure that takes a customer_id as input and returns the total amount spent by that customer
+CREATE OR REPLACE FUNCTION get_customer_total_spent(cust_id_input INT)
+RETURNS NUMERIC AS $$
+DECLARE
+    total NUMERIC;
+BEGIN
+    SELECT COALESCE(SUM(total_amount), 0)
+    INTO total
+    FROM assignment.sales
+    WHERE customer_id = cust_id_input;
+    
+    RETURN total;
+END;
+$$ LANGUAGE plpgsql;
 
 -- 118. Create a PostgreSQL function/procedure that takes a start_date and end_date as input and returns the number of orders made within that date range
+CREATE OR REPLACE FUNCTION count_orders_in_period(start_date DATE, end_date DATE)
+RETURNS INT AS $$
+DECLARE
+    order_count INT;
+BEGIN
+    SELECT COUNT(*)
+    INTO order_count
+    FROM assignment.sales
+    WHERE sale_date BETWEEN start_date AND end_date;
+    
+    RETURN order_count;
+END;
+$$ LANGUAGE plpgsql;
 
 -- 119. Create a PostgreSQL stored procedure that inserts a new record into the sales table 
+CREATE OR REPLACE PROCEDURE insert_new_sale(
+    p_sale_id INT,
+    p_customer_id INT,
+    p_product_id INT,
+    p_quantity_sold INT,
+    p_sale_date DATE,
+    p_total_amount NUMERIC
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO assignment.sales (sale_id, customer_id, product_id, quantity_sold, sale_date, total_amount)
+    VALUES (p_sale_id, p_customer_id, p_product_id, p_quantity_sold, p_sale_date, p_total_amount);
+    
+    COMMIT;
+END;
+$$;
 
 -- 120. Create an index on the product_id column in the sales table to improve join performance
+CREATE INDEX IF NOT EXISTS idx_sales_product_id ON assignment.sales(product_id);
 
 -- 121. Create an index on the registration_date column in the customers table to improve filtering by date
+CREATE INDEX IF NOT EXISTS idx_customers_registration_date ON assignment.customers(registration_date);
 
 -- 122. Write a transaction that inserts a new sale using sale_id, customer_id, product_id, quantity_sold, sale_date, and total_amount, then updates the corresponding product stock_quantity, ensuring both operations succeed or fail together
+BEGIN;
+
+INSERT INTO assignment.sales (sale_id, customer_id, product_id, quantity_sold, sale_date, total_amount)
+VALUES (1001, 42, 15, 3, CURRENT_DATE, 299.97);
+
+UPDATE assignment.products 
+SET stock_quantity = stock_quantity - 3
+WHERE product_id = 15;
+
+COMMIT;  -- or ROLLBACK on error
+
 
 -- 123. Write a transaction that updates a customer’s email and rolls back the change if the email is invalid
+BEGIN;
+
+UPDATE assignment.customers 
+SET email = 'newemail@example.com'
+WHERE customer_id = 5;
+
 
 -- 124. Create a view that shows total revenue per product
+CREATE OR REPLACE VIEW product_revenue AS
+SELECT 
+    p.product_id,
+    p.product_name,
+    COALESCE(SUM(s.total_amount), 0) AS total_revenue
+FROM assignment.products p
+LEFT JOIN assignment.sales s ON p.product_id = s.product_id
+GROUP BY p.product_id, p.product_name;
 
 -- 125. Create a view that shows each customer and their total spending
+CREATE OR REPLACE VIEW customer_spending AS
+SELECT 
+    c.customer_id,
+    c.first_name,
+    c.last_name,
+    COALESCE(SUM(s.total_amount), 0) AS total_spent
+FROM assignment.customers c
+LEFT JOIN assignment.sales s ON c.customer_id = s.customer_id
+GROUP BY c.customer_id, c.first_name, c.last_name;
+
 
 -- 126. Use UNION to combine a list of all customer first names and product names into a single column
+SELECT first_name AS name FROM assignment.customers
+UNION
+SELECT product_name AS name FROM assignment.products
+ORDER BY name;
 
 -- 127. Use INTERSECT to find values that appear in both a list of customer IDs and a list of customer IDs who made purchases
+SELECT customer_id FROM assignment.customers
+INTERSECT
+SELECT DISTINCT customer_id FROM assignment.sales;
 
 -- 128. Perform an anti-join to find products that have never been sold using LEFT JOIN
+SELECT p.*
+FROM assignment.products p
+LEFT JOIN assignment.sales s ON p.product_id = s.product_id
+WHERE s.product_id IS NULL;
 
 -- 129. Use NOT EXISTS to find customers who have not made any purchases
+SELECT c.*
+FROM assignment.customers c
+WHERE NOT EXISTS (
+    SELECT 1 
+    FROM assignment.sales s 
+    WHERE s.customer_id = c.customer_id
+);
 
 -- 130. Cast the price column to an integer and display it alongside the original price
+SELECT 
+    price,
+    price::INTEGER AS price_int
+FROM assignment.products;
 
 -- 131. Convert registration_date to text format and display it in 'YYYY-MM' format
+SELECT 
+    customer_id,
+    TO_CHAR(registration_date, 'YYYY-MM') AS registration_month
+FROM assignment.customers;
 
 -- 132. The following query returns an error due to improper GROUP BY usage. Identify and fix the issue
 -- SELECT product_id, product_name, SUM(total_amount) FROM sales GROUP BY product_id;
+SELECT 
+    s.product_id,
+    p.product_name,
+    SUM(s.total_amount) AS total_revenue
+FROM assignment.sales s
+JOIN assignment.products p ON s.product_id = p.product_id
+GROUP BY s.product_id, p.product_name;
 
 -- 133. The following query incorrectly filters aggregated results using WHERE. Identify and correct it
 -- SELECT product_id, SUM(total_amount) FROM sales WHERE SUM(total_amount) > 1000 GROUP BY product_id;
+SELECT 
+    product_id,
+    SUM(total_amount) AS total_revenue
+FROM assignment.sales
+GROUP BY product_id
+HAVING SUM(total_amount) > 1000;
 
 -- 134. The following query returns incorrect results because it uses the wrong join condition. Identify and fix it
 -- SELECT *
 -- FROM assignment.sales s
 -- JOIN assignment.products p
 --   ON s.customer_id = p.product_id;
+SELECT *
+FROM assignment.sales s
+JOIN assignment.products p ON s.product_id = p.product_id;
 
 -- 135. Replace NULL email values with 'No Email Provided' using COALESCE if any
+SELECT 
+    customer_id,
+    first_name,
+    last_name,
+    COALESCE(email, 'No Email Provided') AS email
+FROM assignment.customers;
 
 -- 136. Trim any leading or trailing spaces from customer first names if any
+UPDATE assignment.customers
+SET first_name = TRIM(first_name);
 
 -- 137. Convert all customer emails to lowercase if any
+UPDATE assignment.customers
+SET email = LOWER(email)
+WHERE email IS NOT NULL;
 
 -- 138. Replace empty strings in phone numbers with NULL if any
+UPDATE assignment.customers
+SET phone_number = NULL
+WHERE phone_number = '';
 
 -- 139. Extract the year from registration_date and handle any NULL dates gracefully if any
-
-
-
+SELECT 
+    customer_id,
+    COALESCE(EXTRACT(YEAR FROM registration_date)::TEXT, 'No Date') AS registration_year
+FROM assignment.customers;
