@@ -1,4 +1,3 @@
-/* Answers */
 set search_path = assignment;
 show search_path;
 
